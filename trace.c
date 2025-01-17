@@ -6,6 +6,8 @@
 #include <netinet/if_ether.h>
 #include <netinet/ip.h>
 #include <netinet/ip_icmp.h> 
+#include <netinet/udp.h>
+#include <netinet/tcp.h>
 #include "checksum.h"
 
 #define MAC_SIZE 6
@@ -91,9 +93,81 @@ void processICMP(const u_char *packet_data, unsigned int ip_header_len) {
     printICMPHeader(icmp->type);
 }
 
+void printSrcDestPort(int src_port, int dest_port){
+    if (src_port == 53) {
+        printf("\t\tSource Port:  %s\n", "DNS");
+    }
+    else if (src_port == 80) {
+        printf("\t\tSource Port:  %s\n", "HTTP");
+    }
+    else {
+        printf("\t\tSource Port:  %d\n", src_port);
+    }
+
+    if (dest_port == 53) {
+        printf("\t\tDest Port:  %s\n", "DNS");
+    }
+    else if (dest_port == 80) {
+        printf("\t\tDest Port:  %s\n", "HTTP");
+    }
+    else {
+        printf("\t\tDest Port:  %d\n", dest_port);
+    }
+}
+
+void printUDPHeader(int src_port, int dest_port){
+    printf("\n\tUDP Header\n");
+    printSrcDestPort(src_port, dest_port);
+}
+
+void processUDP(const u_char *packet_data, unsigned int ip_header_len){
+    struct udphdr *udp = (struct udphdr *)(packet_data + sizeof(struct ethhdr) + ip_header_len);
+    int src_port = ntohs(udp->source);
+    int dest_port = ntohs(udp->dest);
+    printUDPHeader(src_port, dest_port);
+}
+
+void printTCPHeader(int src_port, int dest_port, unsigned int seq_num, unsigned int ack_num, int sf, int rf, int ff, int af, int window_size, int data_offset, int checksum){
+    printf("\n\tTCP Header\n");
+    printSrcDestPort(src_port, dest_port);
+    printf("\t\tSequence Number: %u\n", seq_num);
+    printf("\t\tACK Number: %u\n", ack_num);
+    printf("\t\tData Offset (bytes): %d\n", data_offset);
+    printf("\t\tSYN Flag: %s\n", (sf) ? "Yes" : "No");
+    printf("\t\tRST Flag: %s\n", (rf) ? "Yes" : "No");
+    printf("\t\tFIN Flag: %s\n", (ff) ? "Yes" : "No");
+    printf("\t\tACK Flag: %s\n", (af) ? "Yes" : "No");
+    printf("\t\tWindow Size: %d\n", window_size);
+    printf("\t\tChecksum: Correct (0x%04x)\n", checksum); // fix the correct
+}
+
+void processTCP(const u_char *packet_data, unsigned int ip_header_len) {
+    struct tcphdr *tcp = (struct tcphdr *)(packet_data + sizeof(struct ethhdr) + ip_header_len);
+
+    int src_port = ntohs(tcp->source);
+    int dest_port = ntohs(tcp->dest);
+    unsigned int seq_num = ntohl(tcp->seq);
+    unsigned int ack_num = ntohl(tcp->ack_seq);
+    int syn_flag = tcp->syn;
+    int rst_flag = tcp->rst;
+    int fin_flag = tcp->fin;
+    int ack_flag = tcp->ack;
+    int window_size = ntohs(tcp->window);
+    int data_offset = tcp->doff * 4;
+    int checksum = ntohs(tcp->check);
+
+    printTCPHeader(src_port, dest_port, seq_num, ack_num, syn_flag, rst_flag, fin_flag, ack_flag, window_size, data_offset, checksum);
+}
+
 void processProtocol(char * protocol, const u_char *packet_data, unsigned int ip_header_len) {
     if (strcmp(protocol, "ICMP") == 0) {
         processICMP(packet_data, ip_header_len);
+    }
+    else if (strcmp(protocol, "UDP") == 0){
+        processUDP(packet_data, ip_header_len);
+    }
+    else if (strcmp(protocol, "TCP") == 0){
+        processTCP(packet_data, ip_header_len);
     }
 }
 
@@ -106,7 +180,7 @@ void printIPHeader(struct iphdr *ip, unsigned int ip_header_len, char * ip_proto
     printf("\t\t   ECN bits: %d\n", ip->tos & 0x03);
     printf("\t\tTTL: %d\n", ip->ttl);
     printf("\t\tProtocol: %s\n", ip_protocol);
-    printf("\t\tChecksum: %s (0x%x)\n", "Correct", ntohs(ip->check));
+    printf("\t\tChecksum: %s (0x%04x)\n", "Correct", ntohs(ip->check)); // Fix the correct
     printf("\t\tSender IP: %s\n", inet_ntoa(src_ip));
     printf("\t\tDest IP: %s\n", inet_ntoa(dst_ip));
 }
