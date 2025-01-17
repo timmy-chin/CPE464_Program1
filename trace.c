@@ -5,6 +5,8 @@
 #include <arpa/inet.h>
 #include <netinet/if_ether.h>
 #include <netinet/ip.h>
+#include <netinet/ip_icmp.h> 
+#include "checksum.h"
 
 #define MAC_SIZE 6
 #define IP_SIZE 4
@@ -22,8 +24,6 @@ struct arpHeader {
     uint8_t target_mac[MAC_SIZE]; // Target MAC address
     uint8_t target_ip[IP_SIZE];  // Target IP address
 };
-
-// use memcopy for copying bytes
 
 void getEthernetType(uint16_t type, char *buffer) {
     if (type == ETH_P_IP){
@@ -53,30 +53,82 @@ void getARPOpCode(uint16_t opcode, char *buffer){
     }
 }
 
-void processType(char *type, const u_char *packet_data, struct ethhdr *eth) {
-    if (strcmp(type, "ARP") == 0){
-        struct arpHeader *arp = (struct arpHeader *)(packet_data + sizeof(struct ethhdr));
-        struct in_addr sender_ip;
-        struct in_addr target_ip;
-        u_char sm[MAC_SIZE];
-        u_char tm[MAC_SIZE];
-        memcpy(&sender_ip.s_addr, arp->sender_ip, IP_SIZE);   
-        memcpy(&target_ip.s_addr, arp->target_ip, IP_SIZE);
-        memcpy(&sm, arp->sender_mac, MAC_SIZE);
-        memcpy(&tm, arp->target_mac, MAC_SIZE);
-        char opCode[10];
+void processARP(const u_char *packet_data, struct ethhdr *eth) {
+    struct arpHeader *arp = (struct arpHeader *)(packet_data + sizeof(struct ethhdr));
+    struct in_addr sender_ip;
+    struct in_addr target_ip;
+    u_char sm[MAC_SIZE];
+    u_char tm[MAC_SIZE];
+    memcpy(&sender_ip.s_addr, arp->sender_ip, IP_SIZE);   
+    memcpy(&target_ip.s_addr, arp->target_ip, IP_SIZE);
+    memcpy(&sm, arp->sender_mac, MAC_SIZE);
+    memcpy(&tm, arp->target_mac, MAC_SIZE);
+    char opCode[10];
 
-        getARPOpCode(arp->opcode, opCode);
-        printARPHeader(opCode, sender_ip, target_ip, sm, tm);
+    getARPOpCode(arp->opcode, opCode);
+    printARPHeader(opCode, sender_ip, target_ip, sm, tm);
+}
+
+void get_ip_protocol(uint8_t protocol, char * buffer){
+    if (protocol == IPPROTO_ICMP) {
+        strcpy(buffer, "ICMP");
     }
-    else{
+    else if (protocol == IPPROTO_UDP) {
+        strcpy(buffer, "UDP");
+    }
+    else {
+        strcpy(buffer, "TCP");
+    }
+}
+
+void printICMPHeader(uint8_t icmp_type){
+    printf("\n\tICMP Header\n");
+    printf("\t\tType: %s\n", (icmp_type == ICMP_ECHO) ? "Request" : "Reply");
+}
+
+void processICMP(const u_char *packet_data, unsigned int ip_header_len) {
+    struct icmphdr *icmp = (struct icmphdr *)(packet_data + sizeof(struct ethhdr) + ip_header_len);
+    printICMPHeader(icmp->type);
+}
+
+void processProtocol(char * protocol, const u_char *packet_data, unsigned int ip_header_len) {
+    if (strcmp(protocol, "ICMP") == 0) {
+        processICMP(packet_data, ip_header_len);
+    }
+}
+
+void printIPHeader(struct iphdr *ip, unsigned int ip_header_len, char * ip_protocol, struct in_addr src_ip, struct in_addr dst_ip) {
+    printf("\tIP Header\n");
+    printf("\t\tIP Version: %d\n", ip->version);
+    printf("\t\tHeader Len (bytes): %d\n", ip_header_len);
+    printf("\t\tTOS subfields:\n");
+    printf("\t\t   Diffserv bits: %d\n", (ip->tos & 0xFC) >> 2);
+    printf("\t\t   ECN bits: %d\n", ip->tos & 0x03);
+    printf("\t\tTTL: %d\n", ip->ttl);
+    printf("\t\tProtocol: %s\n", ip_protocol);
+    printf("\t\tChecksum: %s (0x%x)\n", "Correct", ntohs(ip->check));
+    printf("\t\tSender IP: %s\n", inet_ntoa(src_ip));
+    printf("\t\tDest IP: %s\n", inet_ntoa(dst_ip));
+}
+
+void processIP(const u_char *packet_data, struct ethhdr *eth){
         struct iphdr *ip = (struct iphdr *)(packet_data + sizeof(struct ethhdr));
         struct in_addr src_ip, dst_ip;
         src_ip.s_addr = ip->saddr;
         dst_ip.s_addr = ip->daddr;
+        unsigned int ip_header_len = ip->ihl * 4;
+        char ip_protocol[10];
+        get_ip_protocol(ip->protocol, ip_protocol);
+        printIPHeader(ip, ip_header_len, ip_protocol, src_ip, dst_ip);
+        processProtocol(ip_protocol, packet_data, ip_header_len);
+}
 
-        printf("IP Source: %s\n", inet_ntoa(src_ip));
-        printf("IP Destination: %s\n", inet_ntoa(dst_ip));
+void processType(char *type, const u_char *packet_data, struct ethhdr *eth) {
+    if (strcmp(type, "ARP") == 0){
+        processARP(packet_data, eth);
+    }
+    else {
+        processIP(packet_data, eth);
     }
 
 }
