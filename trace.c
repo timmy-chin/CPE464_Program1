@@ -17,7 +17,7 @@
 #define SMTP 25
 #define ICMP_REQUEST 8
 #define ICMP_REPLY 0
-#define ETHERNET_TYPE 0x0800
+#define ETHERNET_TYPE_IP 0x0800
 #define ICMP_PROTOCOL 1
 #define UDP_PROTOCOL 17
 #define TCP_PROTOCOL 6
@@ -90,6 +90,15 @@ struct tcpHeader {
     uint16_t urgent_pointer;
 };
 
+// For TCP checksum
+struct tcp_pseudo_header {
+    unsigned int source;
+    unsigned int destination;
+    unsigned char reserved;
+    unsigned char protocol;
+    unsigned short tcp_length;
+};
+
 void processPacket(struct pcap_pkthdr *packet_header, const u_char *packet_data, int count);
 void processType(char *type, const u_char *packet_data, struct ethHeader *ethernet);
 void processARP(const u_char *packet_data, struct ethHeader *ethernet);
@@ -114,7 +123,7 @@ void IPCheckSum(const u_char *packet_data, struct ethHeader *ethernet, int heade
 
 
 void getEthernetType(uint16_t type, char *buffer) {
-    if (type == ETHERNET_TYPE){
+    if (type == ETHERNET_TYPE_IP){
         strcpy(buffer, "IP");
     }
     else {
@@ -172,7 +181,7 @@ void getPortNumber(int port, char * buffer){
         strcpy(buffer, "Telnet");
     }
     else if (port == FTP) {
-        strcpy(buffer, "FRTP");
+        strcpy(buffer, "FTP");
     }
     else if (port == POP3) {
         strcpy(buffer, "POP3");
@@ -255,29 +264,26 @@ void IPCheckSum(const u_char *packet_data, struct ethHeader *ethernet, int heade
 }
 
 void TCPChecksum(struct ipHeader *ip, struct tcpHeader *tcp, const u_char *packet_data, unsigned int ip_header_len, char *result) {
-    struct tcp_pseudo_header {
-        unsigned int source;
-        unsigned int destination;
-        unsigned char reserved;
-        unsigned char protocol;
-        unsigned short tcp_length;
-    } tcp_pseudo_header;
-
+    // Making the pseudo header for TCP
+    struct tcp_pseudo_header tcp_pseudo_header;
     tcp_pseudo_header.source = ip->source;
     tcp_pseudo_header.destination = ip->destination;
     tcp_pseudo_header.reserved = 0;
     tcp_pseudo_header.protocol = TCP_PROTOCOL;
 
+    // Getting the total length of the TCP segment
     unsigned short tcp_total_length = htons(ntohs(ip->total_len) - ip_header_len);
     tcp_pseudo_header.tcp_length = tcp_total_length;
 
     uint16_t tcp_length = ntohs(tcp_pseudo_header.tcp_length);
 
+    // Creating the TCP segment
     int total_len = sizeof(tcp_pseudo_header) + tcp_length;
     unsigned char *tcp_segment = malloc(total_len);
     memcpy(tcp_segment, &tcp_pseudo_header, sizeof(tcp_pseudo_header));
     memcpy(tcp_segment + sizeof(tcp_pseudo_header), tcp, tcp_length);
 
+    // Get result of checksum with segment
     unsigned short checksum_result = in_cksum((unsigned short *)tcp_segment, total_len);
 
     free(tcp_segment);
@@ -289,6 +295,7 @@ void TCPChecksum(struct ipHeader *ip, struct tcpHeader *tcp, const u_char *packe
     }
 }
 
+// Get ICMP info and prin them
 void processICMP(const u_char *packet_data, unsigned int ip_header_len) {
     struct icmpHeader *icmp = (struct icmpHeader *)(packet_data + sizeof(struct ethHeader) + ip_header_len);
     char icmp_type[10];
@@ -296,6 +303,7 @@ void processICMP(const u_char *packet_data, unsigned int ip_header_len) {
     printICMPHeader(icmp_type);
 }
 
+// Get UDP info and print them
 void processUDP(const u_char *packet_data, unsigned int ip_header_len){
     struct udpHeader *udp = (struct udpHeader *)(packet_data + sizeof(struct ethHeader) + ip_header_len);
     char source_port[10];
@@ -305,6 +313,7 @@ void processUDP(const u_char *packet_data, unsigned int ip_header_len){
     printUDPHeader(source_port, destination_port);
 }
 
+// Get TCP info and print them
 void processTCP(const u_char *packet_data, unsigned int ip_header_len, struct ipHeader *ip) {
     struct tcpHeader *tcp = (struct tcpHeader *)(packet_data + sizeof(struct ethHeader) + ip_header_len);
     char source_port[10];
@@ -318,13 +327,14 @@ void processTCP(const u_char *packet_data, unsigned int ip_header_len, struct ip
     int finish_flag = tcp->finish_flag;
     int ack_flag = tcp->ack_flag;
     int window_size = ntohs(tcp->window_size);
-    int data_offset = tcp->offset * 4;
-    int checksum = ntohs(tcp->checksum);
+    int data_offset = tcp->offset * 4; // multiply by 4 for bytes
+    int checksum = ntohs(tcp->checksum); 
     char checkSumResult[10];
-    TCPChecksum(ip, tcp, packet_data, ip_header_len, checkSumResult);
+    TCPChecksum(ip, tcp, packet_data, ip_header_len, checkSumResult); // get the checksum result
     printTCPHeader(source_port, destination_port, sequence_number, acknowledge_number, sync_flag, reset_flag, finish_flag, ack_flag, window_size, data_offset, checksum, checkSumResult);
 }
 
+// Controller to process based on protocol type
 void processProtocol(char * protocol, const u_char *packet_data, unsigned int ip_header_len, struct ipHeader *ip) {
     if (strcmp(protocol, "ICMP") == 0) {
         processICMP(packet_data, ip_header_len);
@@ -337,6 +347,7 @@ void processProtocol(char * protocol, const u_char *packet_data, unsigned int ip
     }
 }
 
+// Get IP info and print them, then process the protocol
 void processIP(const u_char *packet_data, struct ethHeader *ethernet){
         struct ipHeader *ip = (struct ipHeader *)(packet_data + sizeof(struct ethHeader));
         struct in_addr src_ip, dst_ip;
@@ -351,6 +362,7 @@ void processIP(const u_char *packet_data, struct ethHeader *ethernet){
         processProtocol(ip_protocol, packet_data, ip_header_len, ip);
 }
 
+// Get ARP info and print them
 void processARP(const u_char *packet_data, struct ethHeader *ethernet) {
     struct arpHeader *arp = (struct arpHeader *)(packet_data + sizeof(struct ethHeader));
     struct in_addr ip_source;
@@ -367,6 +379,7 @@ void processARP(const u_char *packet_data, struct ethHeader *ethernet) {
     printARPHeader(opCode, ip_source, ip_destination, sm, tm);
 }
 
+// Controller based on ARP or IP
 void processType(char *type, const u_char *packet_data, struct ethHeader *ethernet) {
     if (strcmp(type, "ARP") == 0){
         processARP(packet_data, ethernet);
@@ -377,6 +390,7 @@ void processType(char *type, const u_char *packet_data, struct ethHeader *ethern
 
 }
 
+// Process a packet by getting Ethernet header and prinnt it, then process the ethernet type
 void processPacket(struct pcap_pkthdr *packet_header,  const u_char *packet_data, int count) {
     int length = packet_header -> len;
     struct ethHeader *ethernet = (struct ethHeader *)packet_data;
@@ -389,6 +403,8 @@ void processPacket(struct pcap_pkthdr *packet_header,  const u_char *packet_data
     processType(ethernet_type, packet_data, ethernet);
 }
 
+
+// Main function that loops through all packets until EOF
 int main(int argc, char *argv[]) {
     const char *packet_name = argv[1];
     struct pcap_pkthdr *packet_header;
@@ -400,5 +416,5 @@ int main(int argc, char *argv[]) {
         count++;
     }
     pcap_close(fp);
-    return 0;
+    return EXIT_SUCCESS;
 }
